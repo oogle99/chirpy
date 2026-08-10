@@ -1,0 +1,6 @@
+POST http://localhost:8080/api/validate_chirp
+Content-Type: application/json
+
+{
+  "body": "I had FORnax interesting kerfuffle for breakfast"
+}
