@@ -1,16 +1,22 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	_ "github.com/lib/pq"
+	"github.com/oogle99/chirpy/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	queries        *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -100,10 +106,17 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 }
 
 func main() {
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Printf("error opening db connection: %v", err)
+	}
+	dbQueries := database.New(db)
+
 	const port = "8080"
 	const filepathRoot = "."
 
-	apiCfg := apiConfig{}
+	apiCfg := apiConfig{queries: dbQueries}
 
 	mux := &http.ServeMux{}
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
