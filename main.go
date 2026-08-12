@@ -64,16 +64,17 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, req *http.Request) {
 	cfg.fileserverHits.Store(0)
 
 	err := cfg.queries.ResetDB(req.Context())
-	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
 	}
 }
 
-func handlerValidateChirp(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	type chirp struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserId uuid.UUID `json:"user_id"`
 	}
 
 	c := chirp{}
@@ -86,7 +87,70 @@ func handlerValidateChirp(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, 200, map[string]string{"cleaned_body": replaceProfane(c.Body)})
+	chirpDb, err := cfg.queries.CreateChirp(req.Context(), database.CreateChirpParams{
+		Body:   c.Body,
+		UserID: c.UserId,
+	})
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	respondWithJSON(w, 201, map[string]string{
+		"id":         chirpDb.ID.String(),
+		"created_at": chirpDb.CreatedAt.String(),
+		"updated_at": chirpDb.UpdatedAt.String(),
+		"body":       replaceProfane(chirpDb.Body),
+		"user_id":    chirpDb.UserID.String(),
+	})
+}
+
+func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, req *http.Request) {
+	chirps, err := cfg.queries.GetAllChirps(req.Context())
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	type chirpResponse struct {
+		ID        string `json:"id"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+		Body      string `json:"body"`
+		UserID    string `json:"user_id"`
+	}
+
+	responses := make([]chirpResponse, 0, len(chirps))
+
+	for _, chirp := range chirps {
+		responses = append(responses, chirpResponse{
+			ID:        chirp.ID.String(),
+			CreatedAt: chirp.CreatedAt.String(),
+			UpdatedAt: chirp.UpdatedAt.String(),
+			Body:      chirp.Body,
+			UserID:    chirp.UserID.String(),
+		})
+	}
+
+	respondWithJSON(w, 200, responses)
+}
+
+func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, req *http.Request) {
+	pathUUID, err := uuid.Parse(req.PathValue("chirpID"))
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	chirpDb, err := cfg.queries.GetChirp(req.Context(), pathUUID)
+	if respondWithErrorIfErr(w, http.StatusNotFound, err) {
+		return
+	}
+
+	respondWithJSON(w, 200, map[string]string{
+		"id":         chirpDb.ID.String(),
+		"created_at": chirpDb.CreatedAt.String(),
+		"updated_at": chirpDb.UpdatedAt.String(),
+		"body":       replaceProfane(chirpDb.Body),
+		"user_id":    chirpDb.UserID.String(),
+	})
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, req *http.Request) {
@@ -182,8 +246,10 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerFileserverHits)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
-	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
