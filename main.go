@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/oogle99/chirpy/internal/auth"
 	"github.com/oogle99/chirpy/internal/database"
 )
 
@@ -148,28 +150,72 @@ func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, req *http.Request) 
 		"id":         chirpDb.ID.String(),
 		"created_at": chirpDb.CreatedAt.String(),
 		"updated_at": chirpDb.UpdatedAt.String(),
-		"body":       replaceProfane(chirpDb.Body),
+		"body":       chirpDb.Body,
 		"user_id":    chirpDb.UserID.String(),
 	})
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, req *http.Request) {
-	type email struct {
-		Body string `json:"email"`
+	type body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
-	e := email{}
+	e := body{}
 	err := decodeJSON(req, &e)
 	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
 		return
 	}
 
-	user, err := cfg.queries.CreateUser(req.Context(), e.Body)
+	hashedPassword, err := auth.HashPassword(e.Password)
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	user, err := cfg.queries.CreateUser(req.Context(), database.CreateUserParams{
+		Email:          e.Email,
+		HashedPassword: hashedPassword,
+	})
 	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
 	}
 
 	respondWithJSON(w, 201, map[string]string{
+		"id":         user.ID.String(),
+		"created_at": user.CreatedAt.String(),
+		"updated_at": user.UpdatedAt.String(),
+		"email":      user.Email,
+	})
+}
+
+func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request) {
+	type body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	e := body{}
+	err := decodeJSON(req, &e)
+	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
+		return
+	}
+
+	user, err := cfg.queries.GetUser(req.Context(), e.Email)
+	if respondWithErrorIfErr(w, http.StatusUnauthorized, err) {
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(e.Password, user.HashedPassword)
+	if respondWithErrorIfErr(w, http.StatusUnauthorized, err) {
+		return
+	}
+
+	if !match {
+		respondWithErrorIfErr(w, http.StatusUnauthorized, errors.New("Incorrect email or password"))
+		return
+	}
+
+	respondWithJSON(w, 200, map[string]string{
 		"id":         user.ID.String(),
 		"created_at": user.CreatedAt.String(),
 		"updated_at": user.UpdatedAt.String(),
@@ -248,6 +294,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 
