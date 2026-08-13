@@ -23,6 +23,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	secret         string
 }
 
 type User struct {
@@ -190,14 +191,19 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, req *http.Request
 
 func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request) {
 	type body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	e := body{}
 	err := decodeJSON(req, &e)
 	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
 		return
+	}
+
+	if e.ExpiresInSeconds == 0 || e.ExpiresInSeconds > 3600 {
+		e.ExpiresInSeconds = 3600
 	}
 
 	user, err := cfg.queries.GetUser(req.Context(), e.Email)
@@ -215,11 +221,17 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(e.ExpiresInSeconds)*time.Second)
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
 	respondWithJSON(w, 200, map[string]string{
 		"id":         user.ID.String(),
 		"created_at": user.CreatedAt.String(),
 		"updated_at": user.UpdatedAt.String(),
 		"email":      user.Email,
+		"token":      token,
 	})
 }
 
@@ -273,6 +285,7 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
+	envSecret := os.Getenv("SECRET")
 	envPlatform := os.Getenv("PLATFORM")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
@@ -284,7 +297,11 @@ func main() {
 	const port = "8080"
 	const filepathRoot = "."
 
-	apiCfg := apiConfig{queries: dbQueries, platform: envPlatform}
+	apiCfg := apiConfig{
+		queries:  dbQueries,
+		platform: envPlatform,
+		secret:   envSecret,
+	}
 
 	mux := &http.ServeMux{}
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
