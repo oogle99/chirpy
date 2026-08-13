@@ -76,8 +76,7 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	type chirp struct {
-		Body   string    `json:"body"`
-		UserId uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	c := chirp{}
@@ -90,9 +89,19 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	token, err := auth.GetBearerToken(req.Header)
+	if respondWithErrorIfErr(w, http.StatusUnauthorized, err) {
+		return
+	}
+
+	userId, err := auth.ValidateJWT(token, cfg.secret)
+	if respondWithErrorIfErr(w, http.StatusUnauthorized, err) {
+		return
+	}
+
 	chirpDb, err := cfg.queries.CreateChirp(req.Context(), database.CreateChirpParams{
 		Body:   c.Body,
-		UserID: c.UserId,
+		UserID: userId,
 	})
 	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
