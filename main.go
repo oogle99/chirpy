@@ -200,19 +200,14 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, req *http.Request
 
 func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request) {
 	type body struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	e := body{}
 	err := decodeJSON(req, &e)
 	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
 		return
-	}
-
-	if e.ExpiresInSeconds == 0 || e.ExpiresInSeconds > 3600 {
-		e.ExpiresInSeconds = 3600
 	}
 
 	user, err := cfg.queries.GetUser(req.Context(), e.Email)
@@ -230,17 +225,29 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(e.ExpiresInSeconds)*time.Second)
+	jwToken, err := auth.MakeJWT(user.ID, cfg.secret)
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	const refreshTokenDuration = 24 * 60 * time.Hour
+	refToken := auth.MakeRefreshToken()
+	refTokenDb, err := cfg.queries.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+		Token:     refToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(refreshTokenDuration),
+	})
 	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
 	}
 
 	respondWithJSON(w, 200, map[string]string{
-		"id":         user.ID.String(),
-		"created_at": user.CreatedAt.String(),
-		"updated_at": user.UpdatedAt.String(),
-		"email":      user.Email,
-		"token":      token,
+		"id":            user.ID.String(),
+		"created_at":    user.CreatedAt.String(),
+		"updated_at":    time.Now().String(),
+		"email":         user.Email,
+		"token":         jwToken,
+		"refresh_token": refTokenDb.Token,
 	})
 }
 
