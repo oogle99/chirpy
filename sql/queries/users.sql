@@ -15,3 +15,8 @@ DELETE FROM users;
 -- name: GetUser :one
 SELECT * FROM users
 WHERE email = $1;
+
+-- name: UpdateUser :exec
+UPDATE users
+SET updated_at = NOW()
+WHERE id = $1;
