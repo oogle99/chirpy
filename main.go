@@ -231,9 +231,13 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 	}
 
 	const refreshTokenDuration = 24 * 60 * time.Hour
-	refToken := auth.MakeRefreshToken()
-	refTokenDb, err := cfg.queries.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
-		Token:     refToken,
+	refreshToken, err := auth.MakeRefreshToken()
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	refreshTokenDb, err := cfg.queries.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
 		UserID:    user.ID,
 		ExpiresAt: time.Now().Add(refreshTokenDuration),
 	})
@@ -241,7 +245,8 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	if err := cfg.queries.UpdateUser(req.Context(), user.ID); err != nil {
+	userUpdatedAtTime, err := cfg.queries.UpdateUserUpdatedAtTime(req.Context(), user.ID)
+	if err != nil {
 		respondWithErrorIfErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -249,10 +254,10 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 	respondWithJSON(w, 200, map[string]string{
 		"id":            user.ID.String(),
 		"created_at":    user.CreatedAt.String(),
-		"updated_at":    user.UpdatedAt.String(),
+		"updated_at":    userUpdatedAtTime.String(),
 		"email":         user.Email,
 		"token":         jwToken,
-		"refresh_token": refTokenDb.Token,
+		"refresh_token": refreshTokenDb.Token,
 	})
 }
 
@@ -267,13 +272,14 @@ func (cfg *apiConfig) handlerRefreshToken(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	if err := cfg.queries.UpdateUser(req.Context(), userId); err != nil {
-		respondWithErrorIfErr(w, http.StatusInternalServerError, err)
+	jwToken, err := auth.MakeJWT(userId, cfg.secret)
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
 	}
 
-	jwToken, err := auth.MakeJWT(userId, cfg.secret)
-	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+	_, err = cfg.queries.UpdateUserUpdatedAtTime(req.Context(), userId)
+	if err != nil {
+		respondWithErrorIfErr(w, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -294,6 +300,12 @@ func (cfg *apiConfig) handlerRevokeToken(w http.ResponseWriter, req *http.Reques
 	}
 
 	if err := cfg.queries.RevokeRefreshToken(req.Context(), userId); err != nil {
+		respondWithErrorIfErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	_, err = cfg.queries.UpdateUserUpdatedAtTime(req.Context(), userId)
+	if err != nil {
 		respondWithErrorIfErr(w, http.StatusInternalServerError, err)
 		return
 	}

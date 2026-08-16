@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -68,13 +69,16 @@ func (q *Queries) ResetDB(ctx context.Context) error {
 	return err
 }
 
-const updateUser = `-- name: UpdateUser :exec
+const updateUserUpdatedAtTime = `-- name: UpdateUserUpdatedAtTime :one
 UPDATE users
 SET updated_at = NOW()
 WHERE id = $1
+RETURNING users.updated_at
 `
 
-func (q *Queries) UpdateUser(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, updateUser, id)
-	return err
+func (q *Queries) UpdateUserUpdatedAtTime(ctx context.Context, id uuid.UUID) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, updateUserUpdatedAtTime, id)
+	var updated_at time.Time
+	err := row.Scan(&updated_at)
+	return updated_at, err
 }

@@ -16,7 +16,8 @@ DELETE FROM users;
 SELECT * FROM users
 WHERE email = $1;
 
--- name: UpdateUser :exec
+-- name: UpdateUserUpdatedAtTime :one
 UPDATE users
 SET updated_at = NOW()
-WHERE id = $1;
+WHERE id = $1
+RETURNING users.updated_at;
