@@ -21,3 +21,11 @@ UPDATE users
 SET updated_at = NOW()
 WHERE id = $1
 RETURNING users.updated_at;
+
+-- name: UpdateUserEmailAndPassword :one
+UPDATE users
+SET updated_at = NOW(),
+    email = $2,
+    hashed_password = $3
+WHERE id = $1
+RETURNING created_at, updated_at, email;
