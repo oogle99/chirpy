@@ -142,7 +142,7 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, req *http.Reque
 		})
 	}
 
-	respondWithJSON(w, 200, responses)
+	respondWithJSON(w, http.StatusOK, responses)
 }
 
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, req *http.Request) {
@@ -190,11 +190,12 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, map[string]string{
-		"id":         user.ID.String(),
-		"created_at": user.CreatedAt.String(),
-		"updated_at": user.UpdatedAt.String(),
-		"email":      user.Email,
+	respondWithJSON(w, http.StatusCreated, map[string]any{
+		"id":            user.ID.String(),
+		"created_at":    user.CreatedAt.String(),
+		"updated_at":    user.UpdatedAt.String(),
+		"email":         user.Email,
+		"is_chirpy_red": user.IsChirpyRed,
 	})
 }
 
@@ -251,13 +252,14 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{
+	respondWithJSON(w, http.StatusOK, map[string]any{
 		"id":            user.ID.String(),
 		"created_at":    user.CreatedAt.String(),
 		"updated_at":    userUpdatedAtTime.String(),
 		"email":         user.Email,
 		"token":         jwToken,
 		"refresh_token": refreshTokenDb.Token,
+		"is_chirpy_red": user.IsChirpyRed,
 	})
 }
 
@@ -354,11 +356,12 @@ func (cfg *apiConfig) handlerUpdateEmailAndPassword(w http.ResponseWriter, req *
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{
-		"id":         userID.String(),
-		"created_at": updatedUser.CreatedAt.String(),
-		"updated_at": updatedUser.UpdatedAt.String(),
-		"email":      updatedUser.Email,
+	respondWithJSON(w, http.StatusOK, map[string]any{
+		"id":            userID.String(),
+		"created_at":    updatedUser.CreatedAt.String(),
+		"updated_at":    updatedUser.UpdatedAt.String(),
+		"email":         updatedUser.Email,
+		"is_chirpy_red": updatedUser.IsChirpyRed,
 	})
 }
 
@@ -400,6 +403,56 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, req *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) handlerChirpyRedUpgrade(w http.ResponseWriter, req *http.Request) {
+	envAPIKey := os.Getenv("POLKA_KEY")
+	apiKey, err := GetAPIKey(req.Header)
+	if respondWithErrorIfErr(w, http.StatusUnauthorized, err) {
+		return
+	}
+
+	if envAPIKey != apiKey {
+		respondWithError(w, http.StatusUnauthorized, "api key does not match env")
+	}
+
+	type body struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	b := body{}
+	err = decodeJSON(req, &b)
+	if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
+		return
+	}
+
+	if b.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	userId, err := uuid.Parse(b.Data.UserID)
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	user, err := cfg.queries.GetUserFromUserId(req.Context(), userId)
+	if respondWithErrorIfErr(w, http.StatusNotFound, err) {
+		return
+	}
+
+	err = cfg.queries.UpdateIsChirpyRed(req.Context(), database.UpdateIsChirpyRedParams{
+		ID:          user.ID,
+		IsChirpyRed: true,
+	})
+	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func replaceProfane(msg string) string {
 	profanity := []string{"kerfuffle", "sharbert", "fornax"}
 
@@ -414,6 +467,19 @@ func replaceProfane(msg string) string {
 	}
 
 	return strings.Join(splitMsg, " ")
+}
+
+func GetAPIKey(headers http.Header) (string, error) {
+	// Need to extract Authorization header
+	// auth.GetBearerToken currently does that
+	// temporarily using it until I can extract
+	// headers better
+	apiKey, err := auth.GetBearerToken(headers)
+	if err != nil {
+		return "", err
+	}
+
+	return apiKey, nil
 }
 
 func decodeJSON[T any](req *http.Request, v *T) error {
@@ -483,6 +549,7 @@ func main() {
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevokeToken)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateEmailAndPassword)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerChirpyRedUpgrade)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
