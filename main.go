@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,14 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type chirpResponse struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Body      string `json:"body"`
+	UserID    string `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -117,28 +126,39 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, req *http.Request) {
+	sortingType := req.URL.Query().Get("sort")
+
+	authorID := req.URL.Query().Get("author_id")
+	if authorID != "" {
+		userID, err := uuid.Parse(authorID)
+		if respondWithErrorIfErr(w, http.StatusBadRequest, err) {
+			return
+		}
+
+		chirpsByAuthor, err := cfg.queries.GetAllChirpsByAuthor(req.Context(), userID)
+		if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
+			return
+		}
+
+		responses := chirpResponses(chirpsByAuthor)
+		if sortingType == "desc" {
+			sort.Slice(responses, func(i, j int) bool {
+				return responses[i].CreatedAt > responses[j].CreatedAt
+			})
+		}
+		respondWithJSON(w, http.StatusOK, responses)
+		return
+	}
+
 	chirps, err := cfg.queries.GetAllChirps(req.Context())
 	if respondWithErrorIfErr(w, http.StatusInternalServerError, err) {
 		return
 	}
 
-	type chirpResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Body      string `json:"body"`
-		UserID    string `json:"user_id"`
-	}
-
-	responses := make([]chirpResponse, 0, len(chirps))
-
-	for _, chirp := range chirps {
-		responses = append(responses, chirpResponse{
-			ID:        chirp.ID.String(),
-			CreatedAt: chirp.CreatedAt.String(),
-			UpdatedAt: chirp.UpdatedAt.String(),
-			Body:      chirp.Body,
-			UserID:    chirp.UserID.String(),
+	responses := chirpResponses(chirps)
+	if sortingType == "desc" {
+		sort.Slice(responses, func(i, j int) bool {
+			return responses[i].CreatedAt > responses[j].CreatedAt
 		})
 	}
 
@@ -467,6 +487,22 @@ func replaceProfane(msg string) string {
 	}
 
 	return strings.Join(splitMsg, " ")
+}
+
+func chirpResponses(chirps []database.Chirp) []chirpResponse {
+	responses := make([]chirpResponse, 0, len(chirps))
+
+	for _, chirp := range chirps {
+		responses = append(responses, chirpResponse{
+			ID:        chirp.ID.String(),
+			CreatedAt: chirp.CreatedAt.String(),
+			UpdatedAt: chirp.UpdatedAt.String(),
+			Body:      chirp.Body,
+			UserID:    chirp.UserID.String(),
+		})
+	}
+
+	return responses
 }
 
 func GetAPIKey(headers http.Header) (string, error) {
